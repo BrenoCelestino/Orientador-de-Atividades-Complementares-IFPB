@@ -1,0 +1,6 @@
+{
+  "name": "Orientação de Atividades IFPB",
+  "description": "Uma ferramenta para ajudar alunos de Engenharia de Computação do IFPB a classificar seus certificados e atividades complementares automaticamente.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
