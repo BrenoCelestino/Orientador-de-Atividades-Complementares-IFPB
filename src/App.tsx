@@ -30,12 +30,22 @@ import {
   Bot,
   Zap,
   Image as ImageIcon,
-  Layers
+  Layers,
+  Copy,
+  Check,
+  Clock,
+  Sparkles,
+  HelpCircle,
+  Calendar,
+  AlertTriangle,
+  GraduationCap,
+  ScrollText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { classifyActivities } from './services/geminiService';
 import { ACTIVITY_RULES, ProcessedActivity } from './types';
 import { ChatBot } from './components/ChatBot';
+import { OnboardingTour } from './components/OnboardingTour';
 
 import { sanitizeInput } from './utils/sanitize';
 
@@ -56,8 +66,37 @@ export default function App() {
   const techSectionRef = useRef<HTMLDivElement>(null);
   
   const [filterCategory, setFilterCategory] = useState<string>('all');
+  const [filterOrigin, setFilterOrigin] = useState<'all' | 'transcript' | 'standalone'>('all');
   const [sortField, setSortField] = useState<SortField>('category');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+  const [copiedTextId, setCopiedTextId] = useState<string | null>(null);
+  const [pasteToast, setPasteToast] = useState<string | null>(null);
+  const [isTourOpen, setIsTourOpen] = useState(false);
+
+  // Check if it's the user's first visit to show the onboarding tour
+  React.useEffect(() => {
+    const hasSeenTour = localStorage.getItem('ifpb_activities_tour_seen');
+    if (!hasSeenTour) {
+      setIsTourOpen(true);
+    }
+  }, []);
+
+  const closeTour = () => {
+    localStorage.setItem('ifpb_activities_tour_seen', 'true');
+    setIsTourOpen(false);
+  };
+
+  const openTour = () => {
+    setIsTourOpen(true);
+  };
+
+  const handleCopy = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedTextId(id);
+    setTimeout(() => {
+      setCopiedTextId(null);
+    }, 2000);
+  };
 
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -69,35 +108,110 @@ export default function App() {
     setInputs(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), type, content: '', showContext: false, contextDescription: '' }]);
   };
 
+  // Reusable function to ingest File objects (from picker, drag&drop, or Ctrl+V clipboard paste)
+  const addFilesToInputs = (files: File[], isPaste = false) => {
+    if (!files.length) return;
+
+    if (inputs.length + files.length > 10) {
+      alert("Você pode adicionar no máximo 10 itens para análise por vez.");
+      return;
+    }
+
+    let addedCount = 0;
+    files.forEach(file => {
+      if (file.size > 15 * 1024 * 1024) {
+        alert(`O arquivo ${file.name} excede o limite de 15MB.`);
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64Content = event.target?.result as string;
+        // Strip data:mime/type;base64,
+        const content = base64Content.split(',')[1];
+        setInputs(prev => [{ 
+          id: Math.random().toString(36).substr(2, 9), 
+          type: 'file', 
+          content, 
+          name: file.name,
+          mimeType: file.type || 'image/png',
+          showContext: false,
+          contextDescription: ''
+        }, ...prev]);
+      };
+      reader.readAsDataURL(file);
+      addedCount++;
+    });
+
+    if (isPaste && addedCount > 0) {
+      setPasteToast(`${addedCount === 1 ? 'Imagem colada' : `${addedCount} imagens coladas`} com sucesso via Ctrl+V!`);
+      setTimeout(() => {
+        setPasteToast(null);
+      }, 3500);
+    }
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const files = Array.from(e.target.files);
-      if (inputs.length + files.length > 10) {
-        alert("Você pode adicionar no máximo 10 itens para análise por vez.");
-        return;
-      }
-      files.forEach(file => {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const base64Content = event.target?.result as string;
-          // Strip data:mime/type;base64,
-          const content = base64Content.split(',')[1];
-          setInputs(prev => [{ 
-            id: Math.random().toString(36).substr(2, 9), 
-            type: 'file', 
-            content, 
-            name: file.name,
-            mimeType: file.type,
-            showContext: false,
-            contextDescription: ''
-          }, ...prev]);
-        };
-        reader.readAsDataURL(file);
-      });
+      addFilesToInputs(files);
     }
     // Limpar o input de arquivo para permitir a seleção do mesmo arquivo novamente se necessário
     e.target.value = '';
   };
+
+  // Listen to global Ctrl+V / Command+V paste for images/screenshots
+  React.useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const clipboardData = e.clipboardData;
+      if (!clipboardData) return;
+
+      const items = Array.from(clipboardData.items || []);
+      const imageItems = items.filter(item => item.type.startsWith('image/'));
+
+      // If user pasted image items (like PrintScreen screenshot or copied image from web/disk)
+      if (imageItems.length > 0) {
+        const filesToProcess: File[] = [];
+        imageItems.forEach((item) => {
+          const file = item.getAsFile();
+          if (file) {
+            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const customName = file.name && file.name !== 'image.png' 
+              ? file.name 
+              : `Imagem Colada (${timeStr}).png`;
+            const renamedFile = new File([file], customName, { type: file.type || 'image/png' });
+            filesToProcess.push(renamedFile);
+          }
+        });
+
+        if (filesToProcess.length > 0) {
+          e.preventDefault();
+          addFilesToInputs(filesToProcess, true);
+          return;
+        }
+      }
+
+      // Check if raw files in clipboard contain PDFs or Images
+      if (clipboardData.files && clipboardData.files.length > 0) {
+        const files = Array.from(clipboardData.files);
+        const validFiles = files.filter(f => f.type.startsWith('image/') || f.type === 'application/pdf');
+        if (validFiles.length > 0) {
+          // If active element is a text input and pasted purely text, let default behavior happen
+          const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+          if (targetTag === 'input' || targetTag === 'textarea') {
+            return;
+          }
+          e.preventDefault();
+          addFilesToInputs(validFiles, true);
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => {
+      window.removeEventListener('paste', handlePaste);
+    };
+  }, [inputs.length]);
 
   const updateInput = (id: string, content: string) => {
     setInputs(prev => prev.map(i => i.id === id ? { ...i, content } : i));
@@ -117,6 +231,16 @@ export default function App() {
 
   const removeInput = (id: string) => {
     setInputs(prev => prev.filter(i => i.id !== id));
+  };
+
+  const deleteActivity = (id: string) => {
+    setResults(prev => prev.filter(a => a.id !== id));
+  };
+
+  const clearAllActivities = () => {
+    if (window.confirm("Deseja remover todas as atividades analisadas da sessão atual?")) {
+      setResults([]);
+    }
   };
 
   const processActivities = async () => {
@@ -140,7 +264,21 @@ export default function App() {
 
       const entryPeriod = entryYear ? { year: parseInt(entryYear), semester: parseInt(entrySemester) } : undefined;
       const data = await classifyActivities(sanitizedInputs, entryPeriod);
-      setResults(prev => [...data, ...prev]);
+      
+      setResults(prev => {
+        // Garantir que todos os IDs sejam estritamente únicos
+        const existingIds = new Set(prev.map(p => p.id));
+        const normalizedData = data.map((item, i) => {
+          if (!item.id || existingIds.has(item.id)) {
+            const freshId = `act_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 9)}`;
+            existingIds.add(freshId);
+            return { ...item, id: freshId };
+          }
+          existingIds.add(item.id);
+          return item;
+        });
+        return [...normalizedData, ...prev];
+      });
       setInputs([]);
       setTimeout(() => {
         resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -161,9 +299,14 @@ export default function App() {
   };
 
   const categoriesInResults = Array.from(new Set(results.map(r => r.ruleId)));
+  const transcriptCount = results.filter(r => r.isFromTranscript || r.sourceType === 'transcript').length;
+  const standaloneCount = results.length - transcriptCount;
 
   const filteredResults = results.filter(r => {
     if (filterCategory !== 'all' && r.ruleId.toString() !== filterCategory.toString()) return false;
+    const isTrans = Boolean(r.isFromTranscript || r.sourceType === 'transcript');
+    if (filterOrigin === 'transcript' && !isTrans) return false;
+    if (filterOrigin === 'standalone' && isTrans) return false;
     return true;
   });
 
@@ -226,12 +369,20 @@ export default function App() {
               <p className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase mt-0.5">Engenharia de Computação</p>
             </div>
           </div>
-          <div className="hidden md:flex items-center gap-4">
-            <a href="https://estudante.ifpb.edu.br/cursos/28/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-xs font-bold tracking-wider text-zinc-400 hover:text-white uppercase transition-colors px-4 py-2 rounded-lg bg-zinc-800/50 hover:bg-zinc-800 border border-white/5 hover:border-white/10">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={openTour}
+              className="flex items-center gap-2 text-xs font-bold tracking-wider text-zinc-300 hover:text-white uppercase transition-colors px-3.5 py-2 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 border border-white/10 hover:border-white/20"
+              title="Abrir tutorial e guia de uso"
+            >
+              <HelpCircle size={14} className="text-ifpb-green" />
+              <span className="hidden sm:inline">Como Funciona</span>
+            </button>
+            <a href="https://estudante.ifpb.edu.br/cursos/28/" target="_blank" rel="noopener noreferrer" className="hidden md:flex items-center gap-2 text-xs font-bold tracking-wider text-zinc-400 hover:text-white uppercase transition-colors px-4 py-2 rounded-lg bg-zinc-800/50 hover:bg-zinc-800 border border-white/5 hover:border-white/10">
               Página do Curso
             </a>
-            <a href="https://suap.ifpb.edu.br/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-xs font-bold tracking-wider text-ifpb-green hover:text-emerald-400 uppercase transition-colors px-4 py-2 rounded-lg bg-ifpb-green/10 hover:bg-ifpb-green/20 border border-ifpb-green/20 hover:border-ifpb-green/40">
-              Acessar SUAP
+            <a href="https://suap.ifpb.edu.br/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-xs font-bold tracking-wider text-ifpb-green hover:text-emerald-400 uppercase transition-colors px-3.5 sm:px-4 py-2 rounded-lg bg-ifpb-green/10 hover:bg-ifpb-green/20 border border-ifpb-green/20 hover:border-ifpb-green/40">
+              <span className="hidden sm:inline">Acessar</span> SUAP
               <ExternalLink size={14} />
             </a>
           </div>
@@ -246,29 +397,62 @@ export default function App() {
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
               <div className="space-y-1">
                 <h2 className="text-2xl font-bold tracking-tight">Nova Orientação</h2>
-                <p className="text-zinc-400">Adicione certificados, links ou descrições para classificar.</p>
+                <p className="text-zinc-400 text-sm">Adicione certificados (PDF/imagem), links ou descrições para classificar.</p>
               </div>
-              <div className="flex gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/10 text-[11px] text-zinc-400 font-mono">
+                  <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-200 font-bold">Ctrl + V</span>
+                  <span>Cole imagens direto</span>
+                </div>
                 <button 
                   onClick={() => addInput('url')}
-                  className="group flex items-center gap-2 px-5 py-2.5 rounded-full bg-zinc-800 hover:bg-zinc-700 hover:shadow-lg hover:shadow-black/50 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 transition-all duration-200 text-sm font-medium border border-white/5"
+                  className="group flex items-center gap-2 px-4 py-2 rounded-full bg-zinc-800 hover:bg-zinc-700 hover:shadow-lg transition-all text-xs font-bold border border-white/5"
                 >
-                  <LinkIcon size={16} className="text-zinc-400 group-hover:text-white transition-colors" /> URL
+                  <LinkIcon size={14} className="text-zinc-400 group-hover:text-white transition-colors" /> URL
                 </button>
                 <button 
                   onClick={() => addInput('text')}
-                  className="group flex items-center gap-2 px-5 py-2.5 rounded-full bg-zinc-800 hover:bg-zinc-700 hover:shadow-lg hover:shadow-black/50 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 transition-all duration-200 text-sm font-medium border border-white/5"
+                  className="group flex items-center gap-2 px-4 py-2 rounded-full bg-zinc-800 hover:bg-zinc-700 hover:shadow-lg transition-all text-xs font-bold border border-white/5"
                 >
-                  <FileText size={16} className="text-zinc-400 group-hover:text-white transition-colors" /> Texto
+                  <FileText size={14} className="text-zinc-400 group-hover:text-white transition-colors" /> Texto
                 </button>
-                <label className="group flex items-center gap-2 px-5 py-2.5 rounded-full bg-ifpb-green text-white cursor-pointer hover:bg-emerald-500 hover:shadow-[0_4px_20px_rgba(50,160,65,0.4)] hover:-translate-y-0.5 active:translate-y-0 active:scale-95 transition-all duration-200 text-sm font-bold border border-ifpb-green/50">
-                  <Upload size={16} className="animate-bounce" /> Arquivos
+                <label className="group flex items-center gap-2 px-5 py-2 rounded-full bg-ifpb-green text-black cursor-pointer hover:bg-emerald-400 hover:shadow-[0_4px_20px_rgba(50,160,65,0.4)] transition-all text-xs font-black border border-ifpb-green/50">
+                  <Upload size={14} /> Carregar Arquivos
                   <input type="file" multiple className="hidden" onChange={handleFileChange} accept="image/*,application/pdf" />
                 </label>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {/* Paste Toast Notification */}
+            <AnimatePresence>
+              {pasteToast && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  className="p-3 bg-ifpb-green/10 border border-ifpb-green/40 rounded-xl flex items-center justify-between gap-3 text-ifpb-green shadow-lg backdrop-blur-sm"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-6 h-6 rounded-full bg-ifpb-green text-black flex items-center justify-center font-bold text-xs">
+                      ✓
+                    </div>
+                    <span className="text-xs font-bold text-white">{pasteToast}</span>
+                  </div>
+                  <span className="text-[10px] uppercase font-mono tracking-widest text-zinc-400 bg-black/40 px-2 py-1 rounded">Área de Transferência</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div 
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                  addFilesToInputs(Array.from(e.dataTransfer.files));
+                }
+              }}
+              className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
+            >
               <AnimatePresence>
                 {inputs.map((input) => (
                   <motion.div
@@ -294,7 +478,7 @@ export default function App() {
 
                     {input.type === 'file' ? (
                       <div className="flex items-center gap-3 py-2">
-                        <div className="w-10 h-10 rounded bg-white/5 flex items-center justify-center">
+                        <div className="w-10 h-10 rounded bg-white/5 flex items-center justify-center shrink-0">
                           <CheckCircle2 size={18} className="text-ifpb-green" />
                         </div>
                         <span className="text-sm font-medium truncate flex-1">{input.name}</span>
@@ -366,13 +550,24 @@ export default function App() {
               </AnimatePresence>
               
               {inputs.length === 0 && (
-                <div className="col-span-full bg-surface rounded-2xl border-2 border-dashed border-white/10 hover:border-ifpb-green/50 transition-all p-12 flex flex-col items-center justify-center space-y-4">
-                  <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center">
+                <div 
+                  onClick={() => {
+                    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+                    fileInput?.click();
+                  }}
+                  className="col-span-full bg-surface rounded-2xl border-2 border-dashed border-white/10 hover:border-ifpb-green/50 transition-all p-10 flex flex-col items-center justify-center space-y-4 cursor-pointer group"
+                >
+                  <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center group-hover:bg-ifpb-green/10 group-hover:scale-105 transition-all">
                     <Upload className="w-8 h-8 text-ifpb-green" />
                   </div>
-                  <div className="text-center">
-                    <p className="text-white font-medium">Nenhum item adicionado ainda</p>
-                    <p className="text-sm text-gray-500 mt-1">Adicione arquivos, links ou texto para classificar.</p>
+                  <div className="text-center space-y-1.5 max-w-md">
+                    <p className="text-white font-bold text-base">Clique ou arraste arquivos aqui</p>
+                    <p className="text-xs text-zinc-400">Suporta PDFs, imagens de certificados ou capturas de tela.</p>
+                    <div className="pt-2 flex items-center justify-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-black/50 border border-white/10 text-[11px] font-mono text-zinc-300">
+                        <span className="text-ifpb-green font-bold">Ctrl + V</span> habilitado (cole screenshots direto)
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -434,6 +629,11 @@ export default function App() {
                   Dica: Informe seu ingresso para que a IA valide se as atividades foram feitas durante o curso.
                 </p>
               )}
+
+              <div className="flex items-center gap-2 text-[11px] text-zinc-400 bg-zinc-900/80 px-4 py-1.5 rounded-full border border-white/5 shadow-sm">
+                <AlertTriangle size={13} className="text-amber-400 shrink-0" />
+                <span>O sistema pode cometer pequenos erros de IA. Revise os dados antes de confiar 100%.</span>
+              </div>
             </div>
           </div>
 
@@ -480,6 +680,20 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Important AI Disclaimer Callout Banner */}
+                <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-start gap-3.5 shadow-lg backdrop-blur-sm">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="flex flex-col gap-1 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-amber-300 uppercase tracking-wider text-[11px]">Aviso de Revisão Obrigatória</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-semibold">Orientação por IA</span>
+                    </div>
+                    <p className="text-zinc-300 leading-relaxed">
+                      O sistema e a Inteligência Artificial podem cometer pequenos erros na leitura de comprovantes, identificação de datas ou enquadramento de regras. <strong>Sempre revise todas as informações, categorias e horas calculadas</strong> antes de confiar 100% ou cadastrar o requerimento no SUAP.
+                    </p>
+                  </div>
+                </div>
+
                 {/* Category Summary */}
                 <div className="flex flex-wrap gap-2">
                   {Array.from(new Set(results.map(r => r.ruleId))).map(ruleId => {
@@ -518,6 +732,19 @@ export default function App() {
                       </select>
                     </div>
 
+                    <div className="flex items-center gap-2 w-full md:w-auto">
+                      <ScrollText size={16} className="text-zinc-500" />
+                      <select 
+                        className="bg-black/30 border border-white/10 rounded-lg py-1.5 px-3 text-sm focus:outline-none focus:border-amber-400 transition-colors text-zinc-300 w-full md:w-auto outline-none"
+                        value={filterOrigin}
+                        onChange={(e) => setFilterOrigin(e.target.value as any)}
+                      >
+                        <option value="all">Todas as Origens ({results.length})</option>
+                        <option value="transcript">📜 Do Histórico Oficial ({transcriptCount})</option>
+                        <option value="standalone">📁 Comprovantes Avulsos ({standaloneCount})</option>
+                      </select>
+                    </div>
+
                     <div className="flex items-center gap-2 w-full md:w-auto md:ml-auto">
                       <span className="text-sm text-zinc-500">Ordenar por:</span>
                       <select 
@@ -537,76 +764,219 @@ export default function App() {
                       >
                         {sortOrder === 'asc' ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
                       </button>
+
+                      <button
+                        onClick={clearAllActivities}
+                        className="p-1.5 px-2.5 rounded-lg bg-black/30 border border-white/10 hover:border-ifpb-red/40 hover:bg-ifpb-red/10 text-zinc-400 hover:text-ifpb-red transition-all flex items-center gap-1 text-xs"
+                        title="Remover todas as atividades da análise"
+                      >
+                        <X size={14} />
+                        <span className="hidden sm:inline">Limpar</span>
+                      </button>
                     </div>
                 </div>
 
-                <div className={viewMode === 'grid' ? 'grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3' : 'flex flex-col gap-4'}>
+                <div className={viewMode === 'grid' ? 'grid gap-5 grid-cols-1 lg:grid-cols-2 xl:grid-cols-3' : 'flex flex-col gap-4'}>
                   {sortedResults.map((activity, idx) => {
                     const rule = ACTIVITY_RULES.find(r => r.id === activity.ruleId);
-                    const isInvalid = activity.confidence === 0 || activity.utilizedHours === 0;
-                    const isLowConfidence = activity.confidence > 0 && activity.confidence <= 0.60;
+                    const rawConf = typeof activity.confidence === 'number' ? activity.confidence : 0.85;
+                    const normalizedConfidence = rawConf > 1 ? (rawConf > 100 ? rawConf / 10000 : rawConf / 100) : rawConf;
+                    const confidencePercent = Math.max(0, Math.min(100, Math.round(normalizedConfidence * 100)));
                     
+                    const isFromTranscript = Boolean(activity.isFromTranscript || activity.sourceType === 'transcript');
+                    const isInvalid = confidencePercent === 0 || activity.utilizedHours === 0;
+                    const isLowConfidence = confidencePercent > 0 && confidencePercent <= 60;
+                    const suapText = activity.suapDescription || activity.title;
+                    const isCopied = copiedTextId === activity.id;
+
+                    // Clean explanation by stripping duplicate skills text if present
+                    const cleanExplanation = activity.explanation
+                      ? activity.explanation
+                          .replace(/\n*\*\*Competências:\*\*.*$/i, '')
+                          .replace(/\n*Competências:.*$/i, '')
+                          .trim()
+                      : "";
+
                     let bgClass = "bg-surface";
                     let borderClass = "border-white/5";
-                    let headerBgClass = "bg-[#1a1a1a] border-white/5";
+                    let headerBgClass = "bg-[#161616] border-white/5";
                     let textClass = "text-ifpb-green";
                     let confidenceClass = "bg-ifpb-green/10 text-ifpb-green border-ifpb-green/20";
                     let explanationBorderClass = "border-ifpb-green";
                     
                     if (isInvalid) {
                       bgClass = "bg-ifpb-red/10";
-                      borderClass = "border-ifpb-red";
+                      borderClass = "border-ifpb-red/40";
                       headerBgClass = "bg-ifpb-red/20 border-ifpb-red/30";
                       textClass = "text-ifpb-red";
                       confidenceClass = "bg-ifpb-red/20 text-ifpb-red border-ifpb-red/50";
                       explanationBorderClass = "border-ifpb-red";
+                    } else if (isFromTranscript) {
+                      bgClass = "bg-amber-950/20";
+                      borderClass = "border-amber-500/40 hover:border-amber-400/80 shadow-lg shadow-amber-500/5";
+                      headerBgClass = "bg-amber-500/15 border-amber-500/30";
+                      textClass = "text-amber-400";
+                      confidenceClass = "bg-amber-500/20 text-amber-300 border-amber-500/40";
+                      explanationBorderClass = "border-amber-500";
                     } else if (isLowConfidence) {
-                      borderClass = "border-ifpb-red/50 hover:border-ifpb-red";
-                      headerBgClass = "bg-[#1a1a1a] border-ifpb-red/20";
-                      confidenceClass = "bg-ifpb-red/10 text-ifpb-red border-ifpb-red/20";
-                      explanationBorderClass = "border-ifpb-red";
+                      borderClass = "border-amber-500/30 hover:border-amber-500/50";
+                      headerBgClass = "bg-amber-500/10 border-amber-500/20";
+                      confidenceClass = "bg-amber-500/10 text-amber-400 border-amber-500/30";
+                      explanationBorderClass = "border-amber-500";
                     }
 
                     if (viewMode === 'list') {
                       return (
                         <motion.div
                           key={activity.id}
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: idx * 0.05 }}
-                          className={`p-4 md:p-5 border flex flex-col md:flex-row md:items-center justify-between gap-6 group rounded-2xl ${bgClass !== 'bg-surface' ? bgClass : 'bg-surface'} ${borderClass} hover:bg-white/[0.02] transition-colors`}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: idx * 0.04 }}
+                          className={`p-5 border flex flex-col md:flex-row md:items-stretch justify-between gap-5 group rounded-2xl ${bgClass} ${borderClass} hover:border-white/20 transition-all`}
                         >
-                          <div className="flex flex-col gap-2 flex-1">
-                            <div className="flex items-center gap-3 flex-wrap">
-                              <span className={`text-xs font-bold px-2 py-0.5 rounded bg-zinc-800 border border-white/10 uppercase tracking-tighter ${isInvalid ? 'text-ifpb-red' : 'text-zinc-400'}`}>
+                          <div className="flex flex-col gap-3 flex-1">
+                            {/* Header Badges */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-zinc-800 border border-white/10 text-zinc-300 uppercase tracking-tight">
                                 {activity.groupName}
                               </span>
-                              <span className={`text-sm font-black uppercase tracking-wide ${isInvalid ? 'text-ifpb-red' : 'text-white'}`}>
+                              {isFromTranscript && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase tracking-tight flex items-center gap-1">
+                                  <GraduationCap size={12} className="text-amber-400" />
+                                  Do Histórico Escolar Oficial
+                                </span>
+                              )}
+                              <span className={`text-xs font-black uppercase tracking-wide ${isInvalid ? 'text-ifpb-red' : isFromTranscript ? 'text-amber-400' : 'text-white'}`}>
                                 {isInvalid ? 'DOCUMENTO INVÁLIDO' : activity.categoryName}
                               </span>
                               <span className={`px-2 py-0.5 text-[10px] font-bold rounded border uppercase ${confidenceClass}`}>
-                                CONFIDENÇA: {Math.round(activity.confidence * 100)}%
+                                Confiança: {confidencePercent}%
                               </span>
                             </div>
-                            <h3 className="font-medium text-white/90">{activity.title}</h3>
-                            <p className="text-xs text-zinc-400 italic">"{activity.explanation}"</p>
+
+                            {/* Dates of Start and End of the event/certificate */}
+                            <div className="flex items-center gap-2 flex-wrap text-xs bg-zinc-900/60 p-2.5 rounded-xl border border-white/5">
+                              <div className="flex items-center gap-1.5 text-zinc-300">
+                                <Calendar size={14} className={isFromTranscript ? "text-amber-400 shrink-0" : "text-ifpb-green shrink-0"} />
+                                <span className="text-zinc-500 font-bold uppercase text-[10px] tracking-wider">Período da Atividade:</span>
+                              </div>
+                              {activity.startDate && activity.endDate && activity.startDate !== activity.endDate ? (
+                                <div className="flex items-center gap-2 text-xs">
+                                  <span className="text-zinc-400">Início: <strong className="text-white font-mono">{activity.startDate}</strong></span>
+                                  <span className="text-zinc-600">•</span>
+                                  <span className="text-zinc-400">Fim / Conclusão: <strong className="text-white font-mono">{activity.endDate}</strong></span>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-zinc-300">
+                                  {activity.startDate || activity.endDate ? (
+                                    <span>Data identificada: <strong className="text-white font-mono">{activity.startDate || activity.endDate}</strong></span>
+                                  ) : (
+                                    <span className="text-zinc-500 italic">Data não identificada no comprovante</span>
+                                  )}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* SUAP Sugestão de Descrição */}
+                            <div className="bg-black/50 border border-white/10 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <div className="flex flex-col gap-1 min-w-0">
+                                <span className={`text-[10px] font-bold uppercase tracking-wider ${isFromTranscript ? 'text-amber-400' : 'text-ifpb-green'} flex items-center gap-1.5`}>
+                                  <FileText size={12} />
+                                  {isFromTranscript ? 'Registrado no SUAP (Histórico Oficial):' : 'Sugestão para o SUAP (Campo "Atividade"): '}
+                                </span>
+                                <p className="text-sm font-medium text-white select-all break-words">
+                                  {suapText}
+                                </p>
+                              </div>
+                              <button
+                                onClick={() => handleCopy(suapText, activity.id)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 flex items-center justify-center gap-1.5 transition-all border ${
+                                  isCopied 
+                                    ? isFromTranscript
+                                      ? 'bg-amber-400 text-black border-amber-400 shadow-sm'
+                                      : 'bg-ifpb-green text-black border-ifpb-green shadow-sm' 
+                                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-white/10'
+                                }`}
+                                title="Copiar descrição para colar no SUAP"
+                              >
+                                {isCopied ? <Check size={14} /> : <Copy size={14} />}
+                                <span>{isCopied ? 'Copiado!' : 'Copiar'}</span>
+                              </button>
+                            </div>
+
+                            {/* Justificativa */}
+                            {cleanExplanation && (
+                              <p className="text-xs text-zinc-400 leading-relaxed bg-zinc-900/40 p-2.5 rounded-lg border border-white/5">
+                                <span className="font-semibold text-zinc-300">Justificativa: </span>
+                                {cleanExplanation}
+                              </p>
+                            )}
+
+                            {/* Competências */}
+                            {activity.skills && activity.skills.length > 0 && (
+                              <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                                <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Habilidades:</span>
+                                {activity.skills.map((skill, sIdx) => (
+                                  <span key={`${activity.id}-lskill-${sIdx}`} className="text-[11px] px-2 py-0.5 rounded-md bg-zinc-800/80 text-zinc-300 border border-white/5 font-medium">
+                                    {skill}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           
-                          <div className="flex flex-col md:items-end shrink-0 bg-black/40 rounded-xl p-3 border border-white/5 md:min-w-[200px]">
-                            <div className="flex flex-col gap-1 w-full text-xs text-zinc-400 mb-2 border-b border-white/5 pb-2">
-                              <div className="flex justify-between gap-4">
-                                <span>Carga Certificada:</span>
-                                <span className="font-mono text-zinc-300">{activity.certificateHours}h</span>
+                          {/* Hour breakdown */}
+                          <div className="flex items-start gap-3 shrink-0">
+                            <div className="flex flex-col md:items-end justify-between shrink-0 bg-black/40 rounded-xl p-4 border border-white/5 md:min-w-[220px]">
+                              <div className="flex flex-col gap-1.5 w-full text-xs text-zinc-400 pb-3 border-b border-white/5">
+                                <div className="flex justify-between gap-4">
+                                  <span>Carga do Certificado:</span>
+                                  <span className={`font-mono font-semibold ${activity.certificateHours > (activity.utilizedHours || activity.hours) ? 'line-through text-zinc-400' : 'text-zinc-200'}`}>
+                                    {activity.certificateHours}h
+                                  </span>
+                                </div>
+                                <div className="flex justify-between gap-4">
+                                  <span>Teto no Curso (PPC):</span>
+                                  <span className="font-mono text-zinc-200 font-semibold">{rule?.maxHours || 0}h</span>
+                                </div>
+                                {rule?.hoursPerUnit && (
+                                  <div className="flex justify-between gap-4 text-[11px] text-zinc-500">
+                                    <span>Cálculo por item:</span>
+                                    <span className="font-mono text-zinc-400">{rule.hoursPerUnit}</span>
+                                  </div>
+                                )}
                               </div>
-                              <div className="flex justify-between gap-4">
-                                <span>Limite Regra:</span>
-                                <span className="font-mono text-zinc-300">{rule?.maxHours || 0}h</span>
+                              <div className="flex justify-between items-end w-full pt-3">
+                                <div>
+                                  <span className="text-[10px] text-zinc-500 uppercase tracking-widest block font-bold">Aproveitamento</span>
+                                  <span className="text-[11px] text-zinc-400">no Histórico</span>
+                                </div>
+                                <div className="flex flex-col items-end">
+                                  <span className={`text-3xl leading-none font-black ${textClass}`}>
+                                    {activity.utilizedHours || activity.hours}h
+                                  </span>
+                                  {activity.certificateHours > (activity.utilizedHours || activity.hours) && (
+                                    <div className="flex items-center gap-1.5 mt-1">
+                                      <span className="text-[11px] text-zinc-400 line-through font-mono font-bold">
+                                        De {activity.certificateHours}h
+                                      </span>
+                                      <span className="text-[9px] text-amber-400 font-semibold px-1 rounded bg-amber-500/10 border border-amber-500/20">
+                                        Teto PPC
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                            <div className="flex justify-between items-end w-full">
-                              <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">Aproveitado</span>
-                              <span className={`text-2xl leading-none font-black ${textClass}`}>{activity.utilizedHours || activity.hours}h</span>
-                            </div>
+
+                            <button
+                              onClick={() => deleteActivity(activity.id)}
+                              className="p-2 rounded-xl text-zinc-500 hover:text-ifpb-red hover:bg-ifpb-red/10 border border-transparent hover:border-ifpb-red/30 transition-all shrink-0"
+                              title="Excluir esta atividade da análise"
+                              aria-label="Excluir atividade"
+                            >
+                              <X size={18} />
+                            </button>
                           </div>
                         </motion.div>
                       );
@@ -615,45 +985,159 @@ export default function App() {
                     return (
                       <motion.div
                         key={activity.id}
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.1 }}
-                        className={`${bgClass} rounded-2xl border flex flex-col card-hover overflow-hidden group ${borderClass}`}
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.08 }}
+                        className={`${bgClass} rounded-2xl border flex flex-col overflow-hidden group ${borderClass} hover:border-white/20 transition-all`}
                       >
-                        <div className={`p-4 border-b flex justify-between items-center ${headerBgClass}`}>
-                          <div className="flex flex-col">
-                            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-0.5">{activity.groupName}</span>
-                            <span className="text-sm font-black text-white uppercase tracking-wide">{isInvalid ? 'DOCUMENTO INVÁLIDO' : activity.categoryName}</span>
+                        {/* Header Zone */}
+                        <div className={`p-4 border-b flex justify-between items-start gap-3 ${headerBgClass}`}>
+                          <div className="flex flex-col gap-1 min-w-0 flex-1">
+                            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{activity.groupName}</span>
+                            {isFromTranscript && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase tracking-tight flex items-center gap-1 w-fit">
+                                <GraduationCap size={12} className="text-amber-400 shrink-0" />
+                                Histórico Oficial
+                              </span>
+                            )}
+                            <span className={`text-sm font-black uppercase tracking-wide line-clamp-2 ${isInvalid ? 'text-ifpb-red' : isFromTranscript ? 'text-amber-400' : 'text-white'}`}>
+                              {isInvalid ? 'DOCUMENTO INVÁLIDO' : activity.categoryName}
+                            </span>
                             <div className="flex items-center gap-2 mt-1">
                               <span className={`px-2 py-0.5 text-[10px] font-bold rounded border uppercase ${confidenceClass}`}>
-                                CONFIDENÇA: {Math.round(activity.confidence * 100)}%
+                                Confiança: {confidencePercent}%
                               </span>
                             </div>
                           </div>
-                          <div className="flex flex-col items-end">
-                            <span className={`text-2xl font-black ${textClass}`}>{activity.utilizedHours || activity.hours}h</span>
-                            {activity.certificateHours > (activity.utilizedHours || activity.hours) && (
-                              <span className="text-[10px] text-gray-500 line-through">De {activity.certificateHours}h</span>
-                            )}
+
+                          <div className="flex items-start gap-2 shrink-0">
+                            <div className="flex flex-col items-end shrink-0 bg-black/40 px-3.5 py-2 rounded-xl border border-white/5 text-right">
+                              <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Aproveitado</span>
+                              <span className={`text-2xl font-black ${textClass}`}>
+                                {activity.utilizedHours || activity.hours}h
+                              </span>
+                              {activity.certificateHours > (activity.utilizedHours || activity.hours) && (
+                                <div className="flex flex-col items-end gap-0.5 mt-0.5">
+                                  <span className="text-[11px] text-zinc-400 line-through font-mono font-bold">
+                                    De {activity.certificateHours}h
+                                  </span>
+                                  <span className="text-[9px] text-amber-400 font-semibold px-1 py-0.2 rounded bg-amber-500/10 border border-amber-500/20">
+                                    Teto PPC
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            <button
+                              onClick={() => deleteActivity(activity.id)}
+                              className="p-1.5 rounded-lg text-zinc-500 hover:text-ifpb-red hover:bg-ifpb-red/10 border border-transparent hover:border-ifpb-red/30 transition-all shrink-0"
+                              title="Excluir esta atividade da análise"
+                              aria-label="Excluir atividade"
+                            >
+                              <X size={16} />
+                            </button>
                           </div>
                         </div>
                         
-                        <div className="p-5 flex-1 flex flex-col">
-                          <h3 className="font-medium text-white mb-2">{activity.title}</h3>
-                          
-                          <div className={`bg-black/40 p-3 rounded-lg border-l-2 mb-4 ${explanationBorderClass}`}>
-                            <p className="text-[12px] text-gray-400 leading-relaxed italic">
-                              "{activity.explanation}"
+                        {/* Body Zone */}
+                        <div className="p-5 flex-1 flex flex-col gap-4">
+                          {/* Datas de Início e Fim do Evento/Certificado */}
+                          <div className="bg-black/40 border border-white/10 rounded-xl p-3 flex flex-col gap-1.5 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                                <Calendar size={13} className={isFromTranscript ? "text-amber-400" : "text-ifpb-green"} />
+                                Datas do Evento / Certificado:
+                              </span>
+                            </div>
+                            
+                            {activity.startDate && activity.endDate && activity.startDate !== activity.endDate ? (
+                              <div className="grid grid-cols-2 gap-2 pt-1">
+                                <div className="bg-zinc-900/80 p-2 rounded-lg border border-white/5">
+                                  <span className="text-[10px] text-zinc-500 block uppercase font-medium">Data de Início</span>
+                                  <span className="text-xs font-bold text-zinc-200 font-mono">{activity.startDate}</span>
+                                </div>
+                                <div className="bg-zinc-900/80 p-2 rounded-lg border border-white/5">
+                                  <span className="text-[10px] text-zinc-500 block uppercase font-medium">Data de Fim / Conclusão</span>
+                                  <span className="text-xs font-bold text-zinc-200 font-mono">{activity.endDate}</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="bg-zinc-900/80 p-2 rounded-lg border border-white/5 flex items-center justify-between">
+                                <span className="text-[10px] text-zinc-500 uppercase font-medium">Data Identificada:</span>
+                                <span className="text-xs font-bold text-zinc-200 font-mono">
+                                  {activity.startDate || activity.endDate || <span className="text-zinc-500 font-normal italic">Não identificada</span>}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Sugestão formatada para o SUAP */}
+                          <div className="bg-black/50 border border-white/10 rounded-xl p-3.5 flex flex-col gap-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`text-[10px] font-bold uppercase tracking-wider ${isFromTranscript ? 'text-amber-400' : 'text-ifpb-green'} flex items-center gap-1.5`}>
+                                <FileText size={12} />
+                                {isFromTranscript ? 'Registrado no SUAP (Histórico Oficial):' : 'Sugestão para o SUAP (Histórico):'}
+                              </span>
+                              <button
+                                onClick={() => handleCopy(suapText, activity.id)}
+                                className={`px-2.5 py-1 rounded-md text-[11px] font-bold shrink-0 flex items-center gap-1 transition-all border ${
+                                  isCopied 
+                                    ? isFromTranscript
+                                      ? 'bg-amber-400 text-black border-amber-400'
+                                      : 'bg-ifpb-green text-black border-ifpb-green' 
+                                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-white/10'
+                                }`}
+                                title="Copiar descrição para colar no SUAP"
+                              >
+                                {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                                <span>{isCopied ? 'Copiado!' : 'Copiar'}</span>
+                              </button>
+                            </div>
+                            <p className="text-xs font-semibold text-white select-all leading-snug bg-zinc-900/60 p-2 rounded-lg border border-white/5">
+                              {suapText}
                             </p>
                           </div>
-                          
-                          <div className="mt-auto flex items-center justify-between pt-2">
-                            <div className="flex items-center gap-2">
-                              {(isInvalid || isLowConfidence) && <AlertCircle size={14} className="text-ifpb-red" />}
-                              {!isInvalid && !isLowConfidence && <TrendingUp size={14} className="text-ifpb-green" />}
-                              <div className="text-[10px] text-gray-500 uppercase tracking-tight">
-                                Limite da categoria: <span className="text-white font-medium">{rule?.maxHours || 0}h</span>
+
+                          {/* Justificativa e Regra */}
+                          {cleanExplanation && (
+                            <div className={`bg-zinc-900/40 p-3 rounded-xl border-l-2 ${explanationBorderClass}`}>
+                              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block mb-1">
+                                Análise & Justificativa:
+                              </span>
+                              <p className="text-xs text-zinc-300 leading-relaxed">
+                                {cleanExplanation}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Competências em Chips */}
+                          {activity.skills && activity.skills.length > 0 && (
+                            <div className="flex flex-col gap-1.5">
+                              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                                Competências & Habilidades:
+                              </span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {activity.skills.map((skill, sIdx) => (
+                                  <span key={`${activity.id}-gskill-${sIdx}`} className="text-[11px] px-2 py-0.5 rounded-md bg-zinc-800/80 text-zinc-300 border border-white/5 font-medium">
+                                    {skill}
+                                  </span>
+                                ))}
                               </div>
+                            </div>
+                          )}
+                          
+                          {/* Footer Info */}
+                          <div className="mt-auto pt-3 border-t border-white/5 flex items-center justify-between text-[11px] text-zinc-400">
+                            <div className="flex items-center gap-1.5">
+                              {(isInvalid || isLowConfidence) ? (
+                                <AlertCircle size={13} className="text-ifpb-red shrink-0" />
+                              ) : (
+                                <TrendingUp size={13} className="text-ifpb-green shrink-0" />
+                              )}
+                              <span>Regra: <strong className="text-zinc-300">{rule?.hoursPerUnit || 'Nº de horas'}</strong></span>
+                            </div>
+                            <div className="text-right">
+                              <span>Teto Categoria: <strong className="text-white">{rule?.maxHours || 0}h</strong></span>
                             </div>
                           </div>
                         </div>
@@ -780,12 +1264,25 @@ export default function App() {
         </div>
 
         <div className="flex items-center justify-center md:justify-end space-x-6 w-full md:w-[20%]">
-          <a href="#" className="text-[10px] font-bold tracking-widest text-zinc-400 hover:text-white uppercase transition-colors">Ajuda</a>
-          <a href="#" className="text-[10px] font-bold tracking-widest text-zinc-400 hover:text-white uppercase transition-colors">Sobre</a>
+          <button 
+            onClick={openTour} 
+            className="text-[10px] font-bold tracking-widest text-zinc-400 hover:text-white uppercase transition-colors"
+          >
+            Tutorial & Ajuda
+          </button>
+          <a 
+            href="https://estudante.ifpb.edu.br/cursos/28/" 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="text-[10px] font-bold tracking-widest text-zinc-400 hover:text-white uppercase transition-colors"
+          >
+            Sobre
+          </a>
         </div>
       </footer>
 
-      <ChatBot />
+      <ChatBot analyzedActivities={results} />
+      <OnboardingTour isOpen={isTourOpen} onClose={closeTour} />
     </div>
   );
 }

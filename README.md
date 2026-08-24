@@ -2,7 +2,7 @@
 
 Este é um sistema inteligente desenvolvido para auxiliar os alunos do curso de Bacharelado em Engenharia de Computação do Instituto Federal da Paraíba (IFPB) - Campus Campina Grande, a classificar, contabilizar e tirar dúvidas sobre suas Atividades Complementares.
 
-O sistema utiliza a inteligência artificial do Google (Gemini 3 Flash Preview) para analisar certificados, declarações, editais e textos, automatizando o mapeamento para as regras do curso definidas no Projeto Pedagógico de Curso (PPC) e na Cartilha de 2026.
+O sistema utiliza a inteligência artificial do Google (Gemini 3.1 Flash Lite) para analisar certificados, declarações, editais e textos, automatizando o mapeamento para as regras do curso definidas no Projeto Pedagógico de Curso (PPC) e na Cartilha de 2026.
 
 ## Funcionalidades Principais
 
@@ -18,7 +18,7 @@ O sistema utiliza a inteligência artificial do Google (Gemini 3 Flash Preview) 
 - **Frontend**: React 18, TypeScript, Tailwind CSS, Vite.
 - **Ícones**: Lucide React.
 - **Animações**: Motion (Framer Motion).
-- **Inteligência Artificial**: SDK GenAI do Google (`@google/genai`) utilizando os modelos `gemini-3-flash-preview` (busca e chat) e suporte a vision para PDFs/Imagens.
+- **Inteligência Artificial**: SDK GenAI do Google (`@google/genai`) utilizando o modelo `gemini-3.1-flash-lite` (busca, chat e classificação estruturada) com suporte a multimodalidade (PDFs/Imagens).
 - **Markdown**: `react-markdown` e `remark-gfm` para renderização das respostas do Chatbot.
 
 ## Como as Regras Funcionam
